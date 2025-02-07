@@ -129,132 +129,108 @@ class _MyHomePageState extends State<MyHomePage> {
       RegExp(r'(\d{1,2}[/-]\d{4})', caseSensitive: false),
       // MM/YY or MM-YY
       RegExp(r'(\d{1,2}[/-]\d{2})', caseSensitive: false),
-      // YYYY/MM/DD
-      RegExp(r'(\d{4}[/-]\d{1,2}[/-]\d{1,2})', caseSensitive: false),
     ];
 
-    // Keywords that indicate expiry date
-    final expiryKeywords = RegExp(
-      r'(exp|expiry|best before|use by|valid until|bb|consume before)',
-      caseSensitive: false
-    );
-
-    // Keywords that indicate manufacturing date
-    final mfgKeywords = RegExp(
-      r'(mfg|manufacturing date|made on|produced on|packed on)',
-      caseSensitive: false
-    );
-
     allDates = [];
-    List<DateInfo> validDates = [];
+    List<DateTime> dates = [];
+    List<String> dateStrings = [];
     final now = DateTime.now();
 
-    // Split text into lines and process each line
-    final lines = text.split('\n');
+    // Simple date parser
+    DateTime? parseDate(String dateStr) {
+      try {
+        final parts = dateStr.split(RegExp(r'[/-]'));
+        
+        if (parts.length == 3) {
+          // DD/MM/YYYY or DD/MM/YY
+          int day = int.parse(parts[0]);
+          int month = int.parse(parts[1]);
+          int year = int.parse(parts[2]);
+          
+          // Handle 2-digit year
+          if (year < 100) {
+            // If year is less than current 2-digit year + 10, assume it's 20xx
+            // Otherwise, assume it's 19xx
+            int currentYear = now.year % 100;
+            if (year < currentYear + 10) {
+              year += 2000;
+            } else {
+              year += 1900;
+            }
+          }
 
-    for (final line in lines) {
-      bool isExpiryLine = line.toLowerCase().contains(expiryKeywords);
-      bool isMfgLine = line.toLowerCase().contains(mfgKeywords);
+          // Validate day and month
+          if (month > 12) {
+            // Might be DD/MM swapped
+            int temp = month;
+            month = day;
+            day = temp;
+          }
+          if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+            return DateTime(year, month, day);
+          }
+        } else if (parts.length == 2) {
+          // MM/YYYY or MM/YY
+          int month = int.parse(parts[0]);
+          int year = int.parse(parts[1]);
+          
+          // Handle 2-digit year
+          if (year < 100) {
+            year += 2000;
+          }
 
+          // Validate month
+          if (month >= 1 && month <= 12) {
+            return DateTime(year, month, 1);
+          }
+        }
+      } catch (e) {
+        print('Error parsing date: $dateStr');
+      }
+      return null;
+    }
+
+    // Find all dates in text
+    for (final line in text.split('\n')) {
       for (final pattern in datePatterns) {
         final matches = pattern.allMatches(line);
         for (final match in matches) {
           final dateStr = match.group(0)?.trim();
           if (dateStr != null) {
-            try {
-              DateTime? parsedDate = _parseDate(dateStr);
-              if (parsedDate != null && _isValidDate(parsedDate, now)) {
-                allDates.add('${dateStr}${isExpiryLine ? ' (EXP)' : isMfgLine ? ' (MFG)' : ''}');
-                validDates.add(DateInfo(
-                  dateStr,
-                  parsedDate,
-                  isExpiryLine
-                ));
-              }
-            } catch (e) {
-              print('Error parsing date: $dateStr');
+            DateTime? date = parseDate(dateStr);
+            if (date != null && _isValidDate(date, now)) {
+              dates.add(date);
+              dateStrings.add(dateStr);
+              allDates.add('$dateStr (${date.year})');
             }
           }
         }
       }
     }
 
-    // Sort dates by expiry flag and date value
-    validDates.sort((a, b) {
-      if (a.isExpiryDate && !b.isExpiryDate) return -1;
-      if (!a.isExpiryDate && b.isExpiryDate) return 1;
-      return b.date.compareTo(a.date);
-    });
+    // If no dates found, return null
+    if (dates.isEmpty) return null;
 
-    // First try to find the latest expiry date
-    final expiryDates = validDates.where((d) => d.isExpiryDate);
-    if (expiryDates.isNotEmpty) {
-      return expiryDates.first.dateStr;
-    }
-
-    // If no expiry date found, return the latest future date
-    final futureDates = validDates.where((d) => d.date.isAfter(now));
-    if (futureDates.isNotEmpty) {
-      return futureDates.first.dateStr;
-    }
-
-    // If no future date found, return the latest date
-    return validDates.isNotEmpty ? validDates.first.dateStr : null;
-  }
-
-  DateTime? _parseDate(String dateStr) {
-    final parts = dateStr.split(RegExp(r'[/-]'));
+    // Find the latest date
+    int latestIndex = 0;
+    DateTime latestDate = dates[0];
     
-    try {
-      if (parts.length == 3) {
-        int year = int.parse(parts[2]);
-        int month = int.parse(parts[1]);
-        int day = int.parse(parts[0]);
-
-        // Handle 2-digit year
-        if (year < 100) {
-          year += 2000;
-        }
-
-        // Validate month and day
-        if (month > 12) {
-          // Might be YYYY/MM/DD format
-          if (parts[0].length == 4) {
-            year = int.parse(parts[0]);
-            month = int.parse(parts[1]);
-            day = int.parse(parts[2]);
-          } else {
-            // Swap day and month if month > 12
-            final temp = month;
-            month = day;
-            day = temp;
-          }
-        }
-
-        return DateTime(year, month, day);
-      } else if (parts.length == 2) {
-        int year = int.parse(parts[1]);
-        int month = int.parse(parts[0]);
-
-        if (year < 100) year += 2000;
-        if (month > 12) return null;
-
-        return DateTime(year, month, 1);
+    for (int i = 1; i < dates.length; i++) {
+      if (dates[i].isAfter(latestDate)) {
+        latestIndex = i;
+        latestDate = dates[i];
       }
-    } catch (e) {
-      print('Error parsing date components: $dateStr');
     }
-    return null;
+
+    return dateStrings[latestIndex];
   }
 
   bool _isValidDate(DateTime date, DateTime now) {
-    final minYear = now.year - 2; // Don't consider dates more than 2 years old
+    final minYear = now.year - 2; // Consider dates up to 2 years old
     final maxYear = now.year + 10; // Don't consider dates more than 10 years in future
 
     return date.year >= minYear && 
-           date.year <= maxYear && 
-           date.month >= 1 && 
-           date.month <= 12;
+           date.year <= maxYear;
   }
 
   Future<void> showImageSourceOptions() async {
@@ -333,38 +309,81 @@ class _MyHomePageState extends State<MyHomePage> {
       final XFile? image = await picker.pickImage(source: source);
       
       if (image != null) {
-        // Text Recognition
-        final inputImage = InputImage.fromFilePath(image.path);
-        final textRecognizer = TextRecognizer();
-        final RecognizedText recognizedText = 
-            await textRecognizer.processImage(inputImage);
-        textRecognizer.close();
+        // Text Recognition - Handle independently
+        try {
+          final inputImage = InputImage.fromFilePath(image.path);
+          final textRecognizer = TextRecognizer();
+          final RecognizedText recognizedText = 
+              await textRecognizer.processImage(inputImage);
+          textRecognizer.close();
 
-        final extractedDate = extractExpiryDate(recognizedText.text);
+          final extractedDate = extractExpiryDate(recognizedText.text);
 
-        setState(() {
-          scannedText = recognizedText.text;
-          expiryDate = extractedDate;
-        });
-
-        // Barcode Scanning
-        var res = await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => const SimpleBarcodeScannerPage(),
-          ),
-        );
-
-        if (res is String && res != "-1") {
           setState(() {
-            barcodeId = res;
+            scannedText = recognizedText.text;
+            expiryDate = extractedDate;
           });
-          await fetchProductInfo(res);
+        } catch (ocrError) {
+          setState(() {
+            scannedText = 'OCR Error: $ocrError';
+          });
+        }
+
+        // Ask user if they want to scan barcode
+        if (mounted) {
+          final shouldScanBarcode = await showDialog<bool>(
+            context: context,
+            builder: (BuildContext context) {
+              return AlertDialog(
+                title: const Text('Scan Barcode?'),
+                content: const Text('Would you like to scan a barcode for this product?'),
+                actions: <Widget>[
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Skip'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: const Text('Scan Barcode'),
+                  ),
+                ],
+              );
+            },
+          ) ?? false;
+
+          if (shouldScanBarcode) {
+            // Barcode Scanning - Handle independently
+            try {
+              var res = await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const SimpleBarcodeScannerPage(),
+                ),
+              );
+
+              if (res is String && res != "-1") {
+                setState(() {
+                  barcodeId = res;
+                });
+                try {
+                  await fetchProductInfo(res);
+                } catch (productError) {
+                  setState(() {
+                    scannedText += '\nProduct Info Error: $productError';
+                  });
+                }
+              }
+            } catch (barcodeError) {
+              setState(() {
+                scannedText += '\nBarcode Error: $barcodeError';
+              });
+            }
+          }
         }
       }
     } catch (e) {
       setState(() {
-        scannedText = 'Error occurred while scanning: $e';
+        scannedText += '\nGeneral Error: $e';
       });
     } finally {
       setState(() {
