@@ -63,94 +63,115 @@ class MyHomePage extends StatefulWidget {
 class ProductInfo {
   final String name;
   final String brand;
-  final String quantity;
-  final String ingredients;
-  final String allergens;
-  final Map<String, dynamic> nutrients;
+  final String description;
+  final String category;
+  final String manufacturer;
   final String imageUrl;
+  final String stores;
+  final String price;
 
   ProductInfo({
     required this.name,
     required this.brand,
-    required this.quantity,
-    required this.ingredients,
-    required this.allergens,
-    required this.nutrients,
+    required this.description,
+    required this.category,
+    required this.manufacturer,
     required this.imageUrl,
+    required this.stores,
+    required this.price,
   });
 
   factory ProductInfo.fromJson(Map<String, dynamic> json) {
-    final product = json['product'];
+    final product = json['products'][0]; // Get first product from results
+    
+    // Handle the images array properly
+    String imgUrl = '';
+    if (product['images'] != null && product['images'] is List && product['images'].isNotEmpty) {
+      imgUrl = product['images'][0].toString();
+    }
+
     return ProductInfo(
-      name: product['product_name'] ?? 'Unknown',
-      brand: product['brands'] ?? 'Unknown',
-      quantity: product['quantity'] ?? 'Unknown',
-      ingredients: product['ingredients_text'] ?? 'No ingredients information',
-      allergens: product['allergens'] ?? 'No allergens information',
-      nutrients: product['nutriments'] ?? {},
-      imageUrl: product['image_url'] ?? '',
+      name: product['title']?.toString() ?? 'Unknown',
+      brand: product['brand']?.toString() ?? 'Unknown',
+      description: product['description']?.toString() ?? 'No description available',
+      category: product['category']?.toString() ?? 'Unknown',
+      manufacturer: product['manufacturer']?.toString() ?? 'Unknown',
+      imageUrl: imgUrl,
+      stores: product['stores']?.toString() ?? 'Not available',
+      price: product['price']?.toString() ?? 'Not available',
     );
   }
+}
+
+class DateInfo {
+  final String dateStr;
+  final DateTime date;
+  final bool isExpiryDate;
+
+  DateInfo(this.dateStr, this.date, this.isExpiryDate);
 }
 
 class _MyHomePageState extends State<MyHomePage> {
   String scannedText = '';
   String? expiryDate;
-  List<String> allDates = [];  // Add this to store all dates
+  String? barcodeId;
+  List<String> allDates = [];
   ProductInfo? productInfo;
   bool isLoading = false;
 
-  // Updated function to extract and compare dates
   String? extractExpiryDate(String text) {
-    // Common date formats
     final List<RegExp> datePatterns = [
       // DD/MM/YYYY or DD-MM-YYYY
-      RegExp(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', caseSensitive: false),
+      RegExp(r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})', caseSensitive: false),
+      // DD/MM/YY or DD-MM-YY
+      RegExp(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2})', caseSensitive: false),
       // MM/YYYY or MM-YYYY
-      RegExp(r'(\d{1,2}[/-]\d{2,4})', caseSensitive: false),
+      RegExp(r'(\d{1,2}[/-]\d{4})', caseSensitive: false),
+      // MM/YY or MM-YY
+      RegExp(r'(\d{1,2}[/-]\d{2})', caseSensitive: false),
+      // YYYY/MM/DD
+      RegExp(r'(\d{4}[/-]\d{1,2}[/-]\d{1,2})', caseSensitive: false),
     ];
 
-    allDates = [];  // Clear previous dates
-    DateTime? latestDate;
-    String? latestDateStr;
+    // Keywords that indicate expiry date
+    final expiryKeywords = RegExp(
+      r'(exp|expiry|best before|use by|valid until|bb|consume before)',
+      caseSensitive: false
+    );
 
-    // Split text into lines for better processing
+    // Keywords that indicate manufacturing date
+    final mfgKeywords = RegExp(
+      r'(mfg|manufacturing date|made on|produced on|packed on)',
+      caseSensitive: false
+    );
+
+    allDates = [];
+    List<DateInfo> validDates = [];
+    final now = DateTime.now();
+
+    // Split text into lines and process each line
     final lines = text.split('\n');
 
     for (final line in lines) {
+      bool isExpiryLine = line.toLowerCase().contains(expiryKeywords);
+      bool isMfgLine = line.toLowerCase().contains(mfgKeywords);
+
       for (final pattern in datePatterns) {
         final matches = pattern.allMatches(line);
         for (final match in matches) {
           final dateStr = match.group(0)?.trim();
           if (dateStr != null) {
-            allDates.add(dateStr);  // Add to all dates list
-            
             try {
-              DateTime? parsedDate;
-              // Try different date formats
-              if (dateStr.contains('/') || dateStr.contains('-')) {
-                final parts = dateStr.split(RegExp(r'[/-]'));
-                if (parts.length == 3) {
-                  // DD/MM/YYYY format
-                  int year = int.parse(parts[2]);
-                  if (year < 100) year += 2000;  // Convert 2-digit year to 4-digit
-                  parsedDate = DateTime(year, int.parse(parts[1]), int.parse(parts[0]));
-                } else if (parts.length == 2) {
-                  // MM/YYYY format
-                  int year = int.parse(parts[1]);
-                  if (year < 100) year += 2000;
-                  parsedDate = DateTime(year, int.parse(parts[0]), 1);
-                }
-              }
-
-              if (parsedDate != null) {
-                if (latestDate == null || parsedDate.isAfter(latestDate)) {
-                  latestDate = parsedDate;
-                  latestDateStr = dateStr;
-                }
+              DateTime? parsedDate = _parseDate(dateStr);
+              if (parsedDate != null && _isValidDate(parsedDate, now)) {
+                allDates.add('${dateStr}${isExpiryLine ? ' (EXP)' : isMfgLine ? ' (MFG)' : ''}');
+                validDates.add(DateInfo(
+                  dateStr,
+                  parsedDate,
+                  isExpiryLine
+                ));
               }
             } catch (e) {
-              // Skip invalid dates
               print('Error parsing date: $dateStr');
             }
           }
@@ -158,7 +179,82 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     }
 
-    return latestDateStr;
+    // Sort dates by expiry flag and date value
+    validDates.sort((a, b) {
+      if (a.isExpiryDate && !b.isExpiryDate) return -1;
+      if (!a.isExpiryDate && b.isExpiryDate) return 1;
+      return b.date.compareTo(a.date);
+    });
+
+    // First try to find the latest expiry date
+    final expiryDates = validDates.where((d) => d.isExpiryDate);
+    if (expiryDates.isNotEmpty) {
+      return expiryDates.first.dateStr;
+    }
+
+    // If no expiry date found, return the latest future date
+    final futureDates = validDates.where((d) => d.date.isAfter(now));
+    if (futureDates.isNotEmpty) {
+      return futureDates.first.dateStr;
+    }
+
+    // If no future date found, return the latest date
+    return validDates.isNotEmpty ? validDates.first.dateStr : null;
+  }
+
+  DateTime? _parseDate(String dateStr) {
+    final parts = dateStr.split(RegExp(r'[/-]'));
+    
+    try {
+      if (parts.length == 3) {
+        int year = int.parse(parts[2]);
+        int month = int.parse(parts[1]);
+        int day = int.parse(parts[0]);
+
+        // Handle 2-digit year
+        if (year < 100) {
+          year += 2000;
+        }
+
+        // Validate month and day
+        if (month > 12) {
+          // Might be YYYY/MM/DD format
+          if (parts[0].length == 4) {
+            year = int.parse(parts[0]);
+            month = int.parse(parts[1]);
+            day = int.parse(parts[2]);
+          } else {
+            // Swap day and month if month > 12
+            final temp = month;
+            month = day;
+            day = temp;
+          }
+        }
+
+        return DateTime(year, month, day);
+      } else if (parts.length == 2) {
+        int year = int.parse(parts[1]);
+        int month = int.parse(parts[0]);
+
+        if (year < 100) year += 2000;
+        if (month > 12) return null;
+
+        return DateTime(year, month, 1);
+      }
+    } catch (e) {
+      print('Error parsing date components: $dateStr');
+    }
+    return null;
+  }
+
+  bool _isValidDate(DateTime date, DateTime now) {
+    final minYear = now.year - 2; // Don't consider dates more than 2 years old
+    final maxYear = now.year + 10; // Don't consider dates more than 10 years in future
+
+    return date.year >= minYear && 
+           date.year <= maxYear && 
+           date.month >= 1 && 
+           date.month <= 12;
   }
 
   Future<void> showImageSourceOptions() async {
@@ -193,14 +289,16 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> fetchProductInfo(String barcode) async {
+    final apiKey = 'iw1ygc5e10s0cegwxiifou0pmd95aa';
+    
     try {
       final response = await http.get(
-        Uri.parse('https://world.openfoodfacts.org/api/v0/product/$barcode.json')
+        Uri.parse('https://api.barcodelookup.com/v3/products?barcode=$barcode&formatted=y&key=$apiKey')
       );
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == 1) {
+        if (data['products'] != null && data['products'].isNotEmpty) {
           setState(() {
             productInfo = ProductInfo.fromJson(data);
           });
@@ -211,12 +309,12 @@ class _MyHomePageState extends State<MyHomePage> {
         }
       } else {
         setState(() {
-          scannedText = 'Failed to fetch product information';
+          scannedText = 'Failed to fetch product information: ${response.statusCode}';
         });
       }
     } catch (e) {
       setState(() {
-        scannedText = 'Error: $e';
+        scannedText = 'Error fetching product info: $e';
       });
     }
   }
@@ -226,6 +324,7 @@ class _MyHomePageState extends State<MyHomePage> {
       isLoading = true;
       scannedText = '';
       expiryDate = null;
+      barcodeId = null;
       productInfo = null;
     });
 
@@ -241,7 +340,6 @@ class _MyHomePageState extends State<MyHomePage> {
             await textRecognizer.processImage(inputImage);
         textRecognizer.close();
 
-        // Extract expiry date from recognized text
         final extractedDate = extractExpiryDate(recognizedText.text);
 
         setState(() {
@@ -258,6 +356,9 @@ class _MyHomePageState extends State<MyHomePage> {
         );
 
         if (res is String && res != "-1") {
+          setState(() {
+            barcodeId = res;
+          });
           await fetchProductInfo(res);
         }
       }
@@ -324,6 +425,14 @@ class _MyHomePageState extends State<MyHomePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (barcodeId != null) ...[
+                        InfoCard(
+                          title: 'Barcode ID',
+                          content: barcodeId!,
+                          color: Colors.blue[100],
+                        ),
+                        const SizedBox(height: 16),
+                      ],
                       if (productInfo != null) ...[
                         Text(
                           'Product Information:',
@@ -348,23 +457,12 @@ class _MyHomePageState extends State<MyHomePage> {
                                   ),
                                 );
                               },
-                              loadingBuilder: (context, child, loadingProgress) {
-                                if (loadingProgress == null) return child;
-                                return Container(
-                                  height: 200,
-                                  width: double.infinity,
-                                  color: Colors.grey[300],
-                                  child: const Center(
-                                    child: CircularProgressIndicator(),
-                                  ),
-                                );
-                              },
                             ),
                           ),
                           const SizedBox(height: 16),
                         ],
                         InfoCard(
-                          title: 'Name',
+                          title: 'Product Name',
                           content: productInfo!.name,
                         ),
                         InfoCard(
@@ -372,21 +470,24 @@ class _MyHomePageState extends State<MyHomePage> {
                           content: productInfo!.brand,
                         ),
                         InfoCard(
-                          title: 'Quantity',
-                          content: productInfo!.quantity,
+                          title: 'Category',
+                          content: productInfo!.category,
                         ),
                         InfoCard(
-                          title: 'Allergens',
-                          content: productInfo!.allergens,
+                          title: 'Description',
+                          content: productInfo!.description,
                         ),
                         InfoCard(
-                          title: 'Nutrients per 100g',
-                          content: '''
-Energy: ${productInfo!.nutrients['energy-kcal_100g']} kcal
-Proteins: ${productInfo!.nutrients['proteins_100g']} g
-Carbohydrates: ${productInfo!.nutrients['carbohydrates_100g']} g
-Fat: ${productInfo!.nutrients['fat_100g']} g
-''',
+                          title: 'Manufacturer',
+                          content: productInfo!.manufacturer,
+                        ),
+                        InfoCard(
+                          title: 'Stores',
+                          content: productInfo!.stores,
+                        ),
+                        InfoCard(
+                          title: 'Price',
+                          content: productInfo!.price,
                         ),
                         const Divider(height: 32),
                       ],
