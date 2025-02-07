@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:simple_barcode_scanner/simple_barcode_scanner.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'dart:io';
 
 void main() {
@@ -58,9 +60,42 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
+class ProductInfo {
+  final String name;
+  final String brand;
+  final String quantity;
+  final String ingredients;
+  final String allergens;
+  final Map<String, dynamic> nutrients;
+  final String imageUrl;
+
+  ProductInfo({
+    required this.name,
+    required this.brand,
+    required this.quantity,
+    required this.ingredients,
+    required this.allergens,
+    required this.nutrients,
+    required this.imageUrl,
+  });
+
+  factory ProductInfo.fromJson(Map<String, dynamic> json) {
+    final product = json['product'];
+    return ProductInfo(
+      name: product['product_name'] ?? 'Unknown',
+      brand: product['brands'] ?? 'Unknown',
+      quantity: product['quantity'] ?? 'Unknown',
+      ingredients: product['ingredients_text'] ?? 'No ingredients information',
+      allergens: product['allergens'] ?? 'No allergens information',
+      nutrients: product['nutriments'] ?? {},
+      imageUrl: product['image_url'] ?? '',
+    );
+  }
+}
+
 class _MyHomePageState extends State<MyHomePage> {
   String scannedText = '';
-  String barcodeResult = '';
+  ProductInfo? productInfo;
   bool isLoading = false;
 
   Future<void> showImageSourceOptions() async {
@@ -94,11 +129,40 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  Future<void> fetchProductInfo(String barcode) async {
+    try {
+      final response = await http.get(
+        Uri.parse('https://world.openfoodfacts.org/api/v0/product/$barcode.json')
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 1) {
+          setState(() {
+            productInfo = ProductInfo.fromJson(data);
+          });
+        } else {
+          setState(() {
+            scannedText = 'Product not found';
+          });
+        }
+      } else {
+        setState(() {
+          scannedText = 'Failed to fetch product information';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        scannedText = 'Error: $e';
+      });
+    }
+  }
+
   Future<void> pickAndScanImage(ImageSource source) async {
     setState(() {
       isLoading = true;
       scannedText = '';
-      barcodeResult = '';
+      productInfo = null;
     });
 
     try {
@@ -124,19 +188,18 @@ class _MyHomePageState extends State<MyHomePage> {
 
         setState(() {
           scannedText = recognizedText.text;
-          if (res is String && res != "-1") {
-            barcodeResult = 'Barcode: $res';
-          }
-          isLoading = false;
         });
-      } else {
-        setState(() {
-          isLoading = false;
-        });
+
+        if (res is String && res != "-1") {
+          await fetchProductInfo(res);
+        }
       }
     } catch (e) {
       setState(() {
         scannedText = 'Error occurred while scanning: $e';
+      });
+    } finally {
+      setState(() {
         isLoading = false;
       });
     }
@@ -194,39 +257,119 @@ class _MyHomePageState extends State<MyHomePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (barcodeResult.isNotEmpty) ...[
-                        const Text(
-                          'Barcode Results:',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
+                      if (productInfo != null) ...[
+                        Text(
+                          'Product Information:',
+                          style: Theme.of(context).textTheme.headlineSmall,
                         ),
                         const SizedBox(height: 8),
-                        Text(
-                          barcodeResult,
-                          style: const TextStyle(fontSize: 16),
+                        if (productInfo!.imageUrl.isNotEmpty) ...[
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.network(
+                              productInfo!.imageUrl,
+                              height: 200,
+                              width: double.infinity,
+                              fit: BoxFit.contain,
+                              errorBuilder: (context, error, stackTrace) {
+                                return Container(
+                                  height: 200,
+                                  width: double.infinity,
+                                  color: Colors.grey[300],
+                                  child: const Center(
+                                    child: Text('Image not available'),
+                                  ),
+                                );
+                              },
+                              loadingBuilder: (context, child, loadingProgress) {
+                                if (loadingProgress == null) return child;
+                                return Container(
+                                  height: 200,
+                                  width: double.infinity,
+                                  color: Colors.grey[300],
+                                  child: const Center(
+                                    child: CircularProgressIndicator(),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                        InfoCard(
+                          title: 'Name',
+                          content: productInfo!.name,
+                        ),
+                        InfoCard(
+                          title: 'Brand',
+                          content: productInfo!.brand,
+                        ),
+                        InfoCard(
+                          title: 'Quantity',
+                          content: productInfo!.quantity,
+                        ),
+                        InfoCard(
+                          title: 'Allergens',
+                          content: productInfo!.allergens,
+                        ),
+                        InfoCard(
+                          title: 'Nutrients per 100g',
+                          content: '''
+Energy: ${productInfo!.nutrients['energy-kcal_100g']} kcal
+Proteins: ${productInfo!.nutrients['proteins_100g']} g
+Carbohydrates: ${productInfo!.nutrients['carbohydrates_100g']} g
+Fat: ${productInfo!.nutrients['fat_100g']} g
+''',
                         ),
                         const Divider(height: 32),
                       ],
-                      const Text(
-                        'Text Results:',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+                      if (scannedText.isNotEmpty) ...[
+                        Text(
+                          'Scanned Text:',
+                          style: Theme.of(context).textTheme.headlineSmall,
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        scannedText.isEmpty 
-                          ? 'No text scanned yet' 
-                          : scannedText,
-                        style: const TextStyle(fontSize: 16),
-                      ),
+                        const SizedBox(height: 8),
+                        Text(scannedText),
+                      ],
                     ],
                   ),
                 ),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class InfoCard extends StatelessWidget {
+  final String title;
+  final String content;
+
+  const InfoCard({
+    Key? key,
+    required this.title,
+    required this.content,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(content),
           ],
         ),
       ),
