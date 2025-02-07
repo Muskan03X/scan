@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:simple_barcode_scanner/simple_barcode_scanner.dart';
 import 'dart:io';
 
 void main() {
@@ -59,35 +60,73 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   String scannedText = '';
+  String barcodeResult = '';
   bool isLoading = false;
 
-  Future<void> scanDocument() async {
+  Future<void> showImageSourceOptions() async {
+    showModalBottomSheet(
+      context: context,
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              ListTile(
+                leading: const Icon(Icons.camera_alt),
+                title: const Text('Take a photo'),
+                onTap: () {
+                  Navigator.pop(context);
+                  pickAndScanImage(ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library),
+                title: const Text('Choose from gallery'),
+                onTap: () {
+                  Navigator.pop(context);
+                  pickAndScanImage(ImageSource.gallery);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> pickAndScanImage(ImageSource source) async {
     setState(() {
       isLoading = true;
       scannedText = '';
+      barcodeResult = '';
     });
 
     try {
-      // Pick image from camera
+      // For Text Recognition
       final ImagePicker picker = ImagePicker();
-      final XFile? image = await picker.pickImage(source: ImageSource.camera);
+      final XFile? image = await picker.pickImage(source: source);
       
       if (image != null) {
-        // Create InputImage from file
+        // Text Recognition
         final inputImage = InputImage.fromFilePath(image.path);
-        
-        // Initialize text recognizer
         final textRecognizer = TextRecognizer();
-        
-        // Process image
         final RecognizedText recognizedText = 
             await textRecognizer.processImage(inputImage);
-            
-        // Release resources
         textRecognizer.close();
-        
+
+        // Barcode Scanning
+        var res = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const SimpleBarcodeScannerPage(),
+          ),
+        );
+
         setState(() {
           scannedText = recognizedText.text;
+          if (res is String && res != "-1") {
+            barcodeResult = 'Barcode: $res';
+          }
           isLoading = false;
         });
       } else {
@@ -106,7 +145,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     // This method is rerun every time setState is called, for instance as done
-    // by the scanDocument method above.
+    // by the pickAndScanImage method above.
     //
     // The Flutter framework has been optimized to make rerunning build methods
     // fast, so that you can just rebuild anything that needs updating rather
@@ -141,7 +180,7 @@ class _MyHomePageState extends State<MyHomePage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
             ElevatedButton.icon(
-              onPressed: isLoading ? null : scanDocument,
+              onPressed: isLoading ? null : showImageSourceOptions,
               icon: const Icon(Icons.document_scanner),
               label: const Text('Scan Document'),
             ),
@@ -152,11 +191,39 @@ class _MyHomePageState extends State<MyHomePage> {
               Expanded(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
-                  child: Text(
-                    scannedText.isEmpty 
-                      ? 'No text scanned yet' 
-                      : scannedText,
-                    style: const TextStyle(fontSize: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (barcodeResult.isNotEmpty) ...[
+                        const Text(
+                          'Barcode Results:',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          barcodeResult,
+                          style: const TextStyle(fontSize: 16),
+                        ),
+                        const Divider(height: 32),
+                      ],
+                      const Text(
+                        'Text Results:',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        scannedText.isEmpty 
+                          ? 'No text scanned yet' 
+                          : scannedText,
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                    ],
                   ),
                 ),
               ),
