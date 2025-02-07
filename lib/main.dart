@@ -95,8 +95,71 @@ class ProductInfo {
 
 class _MyHomePageState extends State<MyHomePage> {
   String scannedText = '';
+  String? expiryDate;
+  List<String> allDates = [];  // Add this to store all dates
   ProductInfo? productInfo;
   bool isLoading = false;
+
+  // Updated function to extract and compare dates
+  String? extractExpiryDate(String text) {
+    // Common date formats
+    final List<RegExp> datePatterns = [
+      // DD/MM/YYYY or DD-MM-YYYY
+      RegExp(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', caseSensitive: false),
+      // MM/YYYY or MM-YYYY
+      RegExp(r'(\d{1,2}[/-]\d{2,4})', caseSensitive: false),
+    ];
+
+    allDates = [];  // Clear previous dates
+    DateTime? latestDate;
+    String? latestDateStr;
+
+    // Split text into lines for better processing
+    final lines = text.split('\n');
+
+    for (final line in lines) {
+      for (final pattern in datePatterns) {
+        final matches = pattern.allMatches(line);
+        for (final match in matches) {
+          final dateStr = match.group(0)?.trim();
+          if (dateStr != null) {
+            allDates.add(dateStr);  // Add to all dates list
+            
+            try {
+              DateTime? parsedDate;
+              // Try different date formats
+              if (dateStr.contains('/') || dateStr.contains('-')) {
+                final parts = dateStr.split(RegExp(r'[/-]'));
+                if (parts.length == 3) {
+                  // DD/MM/YYYY format
+                  int year = int.parse(parts[2]);
+                  if (year < 100) year += 2000;  // Convert 2-digit year to 4-digit
+                  parsedDate = DateTime(year, int.parse(parts[1]), int.parse(parts[0]));
+                } else if (parts.length == 2) {
+                  // MM/YYYY format
+                  int year = int.parse(parts[1]);
+                  if (year < 100) year += 2000;
+                  parsedDate = DateTime(year, int.parse(parts[0]), 1);
+                }
+              }
+
+              if (parsedDate != null) {
+                if (latestDate == null || parsedDate.isAfter(latestDate)) {
+                  latestDate = parsedDate;
+                  latestDateStr = dateStr;
+                }
+              }
+            } catch (e) {
+              // Skip invalid dates
+              print('Error parsing date: $dateStr');
+            }
+          }
+        }
+      }
+    }
+
+    return latestDateStr;
+  }
 
   Future<void> showImageSourceOptions() async {
     showModalBottomSheet(
@@ -162,11 +225,11 @@ class _MyHomePageState extends State<MyHomePage> {
     setState(() {
       isLoading = true;
       scannedText = '';
+      expiryDate = null;
       productInfo = null;
     });
 
     try {
-      // For Text Recognition
       final ImagePicker picker = ImagePicker();
       final XFile? image = await picker.pickImage(source: source);
       
@@ -178,6 +241,14 @@ class _MyHomePageState extends State<MyHomePage> {
             await textRecognizer.processImage(inputImage);
         textRecognizer.close();
 
+        // Extract expiry date from recognized text
+        final extractedDate = extractExpiryDate(recognizedText.text);
+
+        setState(() {
+          scannedText = recognizedText.text;
+          expiryDate = extractedDate;
+        });
+
         // Barcode Scanning
         var res = await Navigator.push(
           context,
@@ -185,10 +256,6 @@ class _MyHomePageState extends State<MyHomePage> {
             builder: (context) => const SimpleBarcodeScannerPage(),
           ),
         );
-
-        setState(() {
-          scannedText = recognizedText.text;
-        });
 
         if (res is String && res != "-1") {
           await fetchProductInfo(res);
@@ -323,6 +390,22 @@ Fat: ${productInfo!.nutrients['fat_100g']} g
                         ),
                         const Divider(height: 32),
                       ],
+                      if (expiryDate != null) ...[
+                        InfoCard(
+                          title: 'Expiry Date',
+                          content: expiryDate!,
+                          color: Colors.amber[100],
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      if (allDates.isNotEmpty) ...[
+                        InfoCard(
+                          title: 'All Detected Dates',
+                          content: allDates.join('\n'),
+                          color: Colors.grey[100],
+                        ),
+                        const SizedBox(height: 16),
+                      ],
                       if (scannedText.isNotEmpty) ...[
                         Text(
                           'Scanned Text:',
@@ -345,16 +428,19 @@ Fat: ${productInfo!.nutrients['fat_100g']} g
 class InfoCard extends StatelessWidget {
   final String title;
   final String content;
+  final Color? color;  // Add color parameter
 
   const InfoCard({
     Key? key,
     required this.title,
     required this.content,
+    this.color,  // Make it optional
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return Card(
+      color: color,  // Use the color if provided
       margin: const EdgeInsets.only(bottom: 8),
       child: Padding(
         padding: const EdgeInsets.all(12),
